@@ -218,3 +218,4 @@ A package to easily deploy **CTGAN** onto a remote server. This package is devel
 
 More details can be found in the corresponding repository: https://github.com/oregonpillow/ctgan-server-cli
 
+Japjot pushing to github
