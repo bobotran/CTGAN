@@ -2,7 +2,9 @@ import numpy as np
 
 
 class Sampler(object):
-    """docstring for Sampler."""
+    """
+    self.model stores dataset indexed by column and (discrete) value
+    """
 
     def __init__(self, data, output_info):
         super(Sampler, self).__init__()
@@ -17,7 +19,7 @@ class Sampler(object):
                 st += item[0]
                 skip = True
             elif item[1] == 'softmax':
-                if skip:
+                if skip: # From continuous column
                     skip = False
                     st += item[0]
                     continue

@@ -19,7 +19,8 @@ class ConditionalGenerator(object):
                 if skip:
                     skip = False
                     start += item[0]
-                    continue
+                    continue # Skip the softmax outputs associated with continuous columns
+
 
                 end = start + item[0]
                 max_interval = max(max_interval, end - start)
@@ -65,7 +66,7 @@ class ConditionalGenerator(object):
 
     def random_choice_prob_index(self, idx):
         a = self.p[idx]
-        r = np.expand_dims(np.random.rand(a.shape[0]), axis=1)
+        r = np.expand_dims(np.random.rand(a.shape[0]), axis=1) # (batch, 1)
         return (a.cumsum(axis=1) > r).argmax(axis=1)
 
     def sample(self, batch):
@@ -73,7 +74,7 @@ class ConditionalGenerator(object):
             return None
 
         batch = batch
-        idx = np.random.choice(np.arange(self.n_col), batch)
+        idx = np.random.choice(np.arange(self.n_col), batch) # Randomly choose columns to condition on
 
         vec1 = np.zeros((batch, self.n_opt), dtype='float32')
         mask1 = np.zeros((batch, self.n_col), dtype='float32')

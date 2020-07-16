@@ -33,7 +33,7 @@ class DataTransformer(object):
             n_init=1
         )
         gm.fit(data)
-        components = gm.weights_ > self.epsilon
+        components = gm.weights_ > self.epsilon # Component weights are close to 0 if model doesn't need them
         num_components = components.sum()
 
         return {
@@ -85,7 +85,7 @@ class DataTransformer(object):
 
         means = model.means_.reshape((1, self.n_clusters))
         stds = np.sqrt(model.covariances_).reshape((1, self.n_clusters))
-        features = (data - means) / (4 * stds)
+        features = (data - means) / (4 * stds) # (num_samples, self.n_clusters) Each column is data normalized by a different mode
 
         probs = model.predict_proba(data)
 
@@ -104,8 +104,8 @@ class DataTransformer(object):
         features = np.clip(features, -.99, .99)
 
         probs_onehot = np.zeros_like(probs)
-        probs_onehot[np.arange(len(probs)), opt_sel] = 1
-        return [features, probs_onehot]
+        probs_onehot[np.arange(len(probs)), opt_sel] = 1 # Indicate chosen mode
+        return [features, probs_onehot] # [(num_samples, 1), (num_samples, n_opts)]
 
     def _transform_discrete(self, column_meta, data):
         encoder = column_meta['encoder']
@@ -131,17 +131,17 @@ class DataTransformer(object):
 
         u = data[:, 0]
         v = data[:, 1:]
-
+        # sigma set to None
         if sigma is not None:
             u = np.random.normal(u, sigma)
 
         u = np.clip(u, -1, 1)
         v_t = np.ones((len(data), self.n_clusters)) * -100
         v_t[:, components] = v
-        v = v_t
+        v = v_t # Mask unused modes
         means = model.means_.reshape([-1])
         stds = np.sqrt(model.covariances_).reshape([-1])
-        p_argmax = np.argmax(v, axis=1)
+        p_argmax = np.argmax(v, axis=1) # Denormalize using most likely mode
         std_t = stds[p_argmax]
         mean_t = means[p_argmax]
         column = u * 4 * std_t + mean_t
@@ -152,11 +152,11 @@ class DataTransformer(object):
         encoder = meta['encoder']
         return encoder.inverse_transform(data)
 
-    def inverse_transform(self, data, sigmas):
+    def inverse_transform(self, data, sigmas): # sigmas set to None
         start = 0
         output = []
         column_names = []
-        for meta in self.meta:
+        for meta in self.meta: # One meta per column
             dimensions = meta['output_dimensions']
             columns_data = data[:, start:start + dimensions]
 
