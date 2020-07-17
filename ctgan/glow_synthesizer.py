@@ -8,6 +8,9 @@ from ctgan.models import Discriminator, Generator
 from ctgan.sampler import Sampler
 from ctgan.transformer import DataTransformer
 
+from ctgan.glow.models import Glow
+import ctgan.glow.util as util
+
 
 class CTGANSynthesizer(object):
     """Conditional Table GAN Synthesizer.
@@ -33,15 +36,10 @@ class CTGANSynthesizer(object):
             Number of data samples to process in each step.
     """
 
-    def __init__(self, embedding_dim=128, gen_dim=(256, 256), dis_dim=(256, 256),
+    def __init__(self, args, embedding_dim=128, gen_dim=(256, 256), dis_dim=(256, 256),
                  l2scale=1e-6, batch_size=500):
+        self.args = args
 
-        self.embedding_dim = embedding_dim
-        self.gen_dim = gen_dim
-        self.dis_dim = dis_dim
-
-        self.l2scale = l2scale
-        self.batch_size = batch_size
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
     def fit(self, train_data, discrete_columns=tuple(), epochs=300, log_frequency=True):
@@ -71,19 +69,32 @@ class CTGANSynthesizer(object):
 
         data_dim = self.transformer.output_dimensions
 
-        assert self.batch_size % 2 == 0
+        assert self.args.batch_size % 2 == 0
 
-        steps_per_epoch = max(len(train_data) // self.batch_size, 1)
+        self.flow = Glow(dim=data_dim,
+               hidden_layers=self.args.hidden_layers,
+               num_levels=self.args.num_levels,
+               num_steps=self.args.num_steps).to(self.device)
+
+        loss_fn = util.NLLLoss().to(device)
+        optimizer = optim.Adam(self.flow.parameters(), lr=args.lr, betas=(0.5, 0.9),
+            weight_decay=self.args.l2scale)
+
+        steps_per_epoch = max(len(train_data) // self.args.batch_size, 1)
         for i in range(epochs):
             for id_ in range(steps_per_epoch):
                 c1, m1, col, opt = None, None, None, None
-                real = data_sampler.sample(self.batch_size, col, opt)
+                real = data_sampler.sample(self.args.batch_size, col, opt)
                 real = torch.from_numpy(real.astype('float32')).to(self.device)
 
-                
+                optimizer.zero_grad()
+                z, sldj = self.flow(real, reverse=False)
+                loss = loss_fn(z, sldj)
+                loss.backward()
+                optimizer.step()
 
-            print("Epoch %d, Loss G: %.4f, Loss D: %.4f" %
-                  (i + 1, loss_g.detach().cpu(), loss_d.detach().cpu()),
+            print("Epoch %d, Loss: %.4f" %
+                  (i + 1, loss.detach().cpu()),
                   flush=True)
 
     def sample(self, n):
@@ -97,22 +108,11 @@ class CTGANSynthesizer(object):
             numpy.ndarray or pandas.DataFrame
         """
 
-        steps = n // self.batch_size + 1
+        steps = n // self.args.batch_size + 1
         data = []
         for i in range(steps):
-            mean = torch.zeros(self.batch_size, self.embedding_dim)
-            std = mean + 1
-            fakez = torch.normal(mean=mean, std=std).to(self.device)
-
-            condvec = self.cond_generator.sample_zero(self.batch_size)
-            if condvec is None:
-                pass
-            else:
-                c1 = condvec
-                c1 = torch.from_numpy(c1).to(self.device)
-                fakez = torch.cat([fakez, c1], dim=1)
-
-            fake = self.generator(fakez)
+            z = torch.randn((self.args.batch_size, self.transformer.output_dimensions), dtype=torch.float32, device=device)
+            fake, _ = self.flow(z, reverse=True)
             fakeact = self._apply_activate(fake)
             data.append(fakeact.detach().cpu().numpy())
 
