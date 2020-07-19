@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.glow.act_norm import ActNorm
+from ctgan.glow.models.glow.act_norm import ActNorm
 
 
 class Coupling(nn.Module):
@@ -23,7 +23,7 @@ class Coupling(nn.Module):
         self.scale = nn.Parameter(torch.ones(in_channels // 2))
 
     def forward(self, x, ldj, reverse=False):
-        x_change, x_id = x.squeeze().chunk(2, dim=1)
+        x_id, x_change = x.squeeze().chunk(2, dim=1)
 
         st = self.nn(x_id)
         s, t = st[:, 0::2], st[:, 1::2]
@@ -37,7 +37,7 @@ class Coupling(nn.Module):
             x_change = (x_change + t) * s.exp()
             ldj = ldj + s.sum(-1)
 
-        x = torch.cat((x_change, x_id), dim=1).unsqueeze(-1).unsqueeze(-1)
+        x = torch.cat((x_id, x_change), dim=1).unsqueeze(-1).unsqueeze(-1)
 
         return x, ldj
 

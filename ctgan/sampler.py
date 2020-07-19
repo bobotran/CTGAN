@@ -34,7 +34,7 @@ class Sampler(object):
             else:
                 assert 0
 
-        assert st == data.shape[1]
+        assert st == data.shape[1] or st == data.shape[1] - 1
 
     def sample(self, n, col, opt):
         if col is None:

@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from torch import optim
+from torch.optim.lr_scheduler import MultiplicativeLR
 from torch.nn import functional
 
 from ctgan.conditional import ConditionalGenerator
@@ -10,9 +11,11 @@ from ctgan.transformer import DataTransformer
 
 from ctgan.glow.models import Glow
 import ctgan.glow.util as util
+import time
+from sdgym.synthesizers import BaseSynthesizer
 
 
-class CTGANSynthesizer(object):
+class CTGlowSynthesizer(BaseSynthesizer):
     """Conditional Table GAN Synthesizer.
 
     This is the core class of the CTGAN project, where the different components
@@ -42,6 +45,23 @@ class CTGANSynthesizer(object):
 
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
+    def _apply_activate(self, data):
+        data_t = []
+        st = 0
+        for item in self.transformer.output_info:
+            if item[1] == 'tanh':
+                ed = st + item[0]
+                data_t.append(torch.tanh(data[:, st:ed]))
+                st = ed
+            elif item[1] == 'softmax':
+                ed = st + item[0]
+                data_t.append(functional.gumbel_softmax(data[:, st:ed], tau=0.2))
+                st = ed
+            else:
+                assert 0
+
+        return torch.cat(data_t, dim=1)
+
     def fit(self, train_data, discrete_columns=tuple(), epochs=300, log_frequency=True):
         """Fit the CTGAN Synthesizer models to the training data.
 
@@ -65,23 +85,29 @@ class CTGANSynthesizer(object):
         self.transformer.fit(train_data, discrete_columns)
         train_data = self.transformer.transform(train_data)
 
+        self.data_dim = self.transformer.output_dimensions
+        if self.data_dim % 2 != 0:
+            train_data = np.concatenate((train_data, np.zeros((train_data.shape[0], 1))), axis=1)
+            self.data_dim += 1
+
         data_sampler = Sampler(train_data, self.transformer.output_info)
 
-        data_dim = self.transformer.output_dimensions
 
         assert self.args.batch_size % 2 == 0
 
-        self.flow = Glow(dim=data_dim,
+        self.flow = Glow(dim=self.data_dim,
                hidden_layers=self.args.hidden_layers,
                num_levels=self.args.num_levels,
                num_steps=self.args.num_steps).to(self.device)
 
-        loss_fn = util.NLLLoss().to(device)
-        optimizer = optim.Adam(self.flow.parameters(), lr=args.lr, betas=(0.5, 0.9),
+        loss_fn = util.NLLLoss().to(self.device)
+        optimizer = optim.Adam(self.flow.parameters(), lr=self.args.lr, betas=(0.5, 0.9),
             weight_decay=self.args.l2scale)
+        scheduler = MultiplicativeLR(optimizer, lr_lambda=lambda epoch: 0.95)
 
         steps_per_epoch = max(len(train_data) // self.args.batch_size, 1)
         for i in range(epochs):
+            start = time.time()
             for id_ in range(steps_per_epoch):
                 c1, m1, col, opt = None, None, None, None
                 real = data_sampler.sample(self.args.batch_size, col, opt)
@@ -92,9 +118,10 @@ class CTGANSynthesizer(object):
                 loss = loss_fn(z, sldj)
                 loss.backward()
                 optimizer.step()
-
-            print("Epoch %d, Loss: %.4f" %
-                  (i + 1, loss.detach().cpu()),
+            end = time.time()
+            scheduler.step(i)
+            print("Epoch %d, Loss: %.4f, lr: %.8f Time: %.4f" %
+                  (i + 1, loss.detach().cpu(), optimizer.param_groups[0]['lr'], end - start),
                   flush=True)
 
     def sample(self, n):
@@ -111,7 +138,7 @@ class CTGANSynthesizer(object):
         steps = n // self.args.batch_size + 1
         data = []
         for i in range(steps):
-            z = torch.randn((self.args.batch_size, self.transformer.output_dimensions), dtype=torch.float32, device=device)
+            z = torch.randn((self.args.batch_size, self.data_dim), dtype=torch.float32, device=self.device)
             fake, _ = self.flow(z, reverse=True)
             fakeact = self._apply_activate(fake)
             data.append(fakeact.detach().cpu().numpy())

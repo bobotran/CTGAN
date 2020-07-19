@@ -1,1 +1,1 @@
-from models.glow import Glow
+from ctgan.glow.models.glow import Glow

@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.glow.act_norm import ActNorm
-from models.glow.coupling import Coupling
-from models.glow.inv_conv import InvConv
+from ctgan.glow.models.glow.act_norm import ActNorm
+from ctgan.glow.models.glow.coupling import Coupling
+from ctgan.glow.models.glow.inv_conv import InvConv
 
 
 class Glow(nn.Module):
@@ -33,16 +33,16 @@ class Glow(nn.Module):
     def forward(self, x, reverse=False):
         assert len(x.size()) == 2, 'Expects (N, D) inputs'
         x = x.unsqueeze(-1).unsqueeze(-1)
-        if reverse:
-            sldj = torch.zeros(x.size(0), device=x.device)
-        else:
-            # Expect inputs in [0, 1]
-            if x.min() < 0 or x.max() > 1:
-                raise ValueError('Expected x in [0, 1], got min/max {}/{}'
-                                 .format(x.min(), x.max()))
+#        if reverse:
+        sldj = torch.zeros(x.size(0), device=x.device)
+#        else:
+#            # Expect inputs in [0, 1]
+#            if x.min() < 0 or x.max() > 1:
+#                raise ValueError('Expected x in [0, 1], got min/max {}/{}'
+#                                 .format(x.min(), x.max()))
 
             # De-quantize and convert to logits
-            x, sldj = self._pre_process(x)
+#            x, sldj = self._pre_process(x)
 
         x, sldj = self.flows(x, sldj, reverse)
 
