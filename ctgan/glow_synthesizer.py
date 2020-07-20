@@ -119,7 +119,7 @@ class CTGlowSynthesizer(BaseSynthesizer):
                 loss.backward()
                 optimizer.step()
             end = time.time()
-            scheduler.step(i)
+            scheduler.step()
             print("Epoch %d, Loss: %.4f, lr: %.8f Time: %.4f" %
                   (i + 1, loss.detach().cpu(), optimizer.param_groups[0]['lr'], end - start),
                   flush=True)

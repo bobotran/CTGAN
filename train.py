@@ -7,13 +7,12 @@ def str2bool(s):
 
 parser = argparse.ArgumentParser(description='Glow on tabular data')
 
-parser.add_argument('--batch_size', default=128, type=int, help='Batch size per GPU')
+parser.add_argument('--batch_size', default=1024, type=int, help='Batch size per GPU')
 parser.add_argument('--lr', default=1e-4, type=float, help='Learning rate')
 parser.add_argument('--hidden_layers', '-C', default=[512], type=int, nargs='+', help='Number of channels in hidden layers')
 parser.add_argument('--num_levels', '-L', default=1, type=int, help='Number of levels in the Glow model')
 parser.add_argument('--num_steps', '-K', default=32, type=int, help='Number of steps of flow in each level')
 parser.add_argument('--num_epochs', default=100, type=int, help='Number of epochs to train')
-parser.add_argument('--num_workers', default=8, type=int, help='Number of data loader threads')
 parser.add_argument('--num_samples', default=10, type=int, help='Number of samples at test time')
 parser.add_argument('--l2scale', '--weight_decay', default=1e-6, type=float, help='L2 regularization on flow weights')
 parser.add_argument('--resume', type=str2bool, default=False, help='Resume from checkpoint')
