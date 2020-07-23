@@ -1,6 +1,7 @@
 import numpy as np
 import torch
 from torch import optim
+from torch.optim.lr_scheduler import MultiplicativeLR
 from torch.nn import functional
 
 from ctgan.conditional import ConditionalGenerator
@@ -8,8 +9,16 @@ from ctgan.models import Discriminator, Generator
 from ctgan.sampler import Sampler
 from ctgan.transformer import DataTransformer
 
+from ctgan.glow.models import Glow
+import ctgan.glow.util as util
+import time
+from sdgym.synthesizers import BaseSynthesizer
 
-class CTGANSynthesizer(object):
+import os
+import logging
+import json
+
+class CTGlowSynthesizer(BaseSynthesizer):
     """Conditional Table GAN Synthesizer.
 
     This is the core class of the CTGAN project, where the different components
@@ -33,16 +42,22 @@ class CTGANSynthesizer(object):
             Number of data samples to process in each step.
     """
 
-    def __init__(self, embedding_dim=128, gen_dim=(256, 256), dis_dim=(256, 256),
+    def __init__(self, args, embedding_dim=128, gen_dim=(256, 256), dis_dim=(256, 256),
                  l2scale=1e-6, batch_size=500):
+        self.args = args
 
-        self.embedding_dim = embedding_dim
-        self.gen_dim = gen_dim
-        self.dis_dim = dis_dim
-
-        self.l2scale = l2scale
-        self.batch_size = batch_size
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+
+        #os.makedirs(self.args.output_dir)
+        with open(os.path.join(self.args.output_dir, 'train_config.json'), 'w') as f:
+            json.dump(self.args.__dict__, f, indent=4)
+
+        logging.basicConfig()
+        self.logger = logging.getLogger()
+        self.logger.setLevel(logging.INFO)
+        log_fp = os.path.join(self.args.output_dir, 'train.log')
+        log_fh = logging.FileHandler(log_fp)
+        self.logger.addHandler(log_fh)
 
     def _apply_activate(self, data):
         data_t = []
@@ -61,169 +76,64 @@ class CTGANSynthesizer(object):
 
         return torch.cat(data_t, dim=1)
 
-    def _cond_loss(self, data, c, m):
-        loss = []
-        st = 0
-        st_c = 0
-        skip = False
-        for item in self.transformer.output_info:
-            if item[1] == 'tanh':
-                st += item[0]
-                skip = True
-
-            elif item[1] == 'softmax':
-                if skip:
-                    skip = False
-                    st += item[0]
-                    continue
-
-                ed = st + item[0]
-                ed_c = st_c + item[0]
-                tmp = functional.cross_entropy(
-                    data[:, st:ed],
-                    torch.argmax(c[:, st_c:ed_c], dim=1),
-                    reduction='none'
-                )
-                loss.append(tmp)
-                st = ed
-                st_c = ed_c
-
-            else:
-                assert 0
-
-        loss = torch.stack(loss, dim=1)
-
-        return (loss * m).sum() / data.size()[0]
-
-    def fit(self, train_data, discrete_columns=tuple(), epochs=300, log_frequency=True):
+    def fit(self, train_data, discrete_columns=tuple(), ordinal_columns=tuple()):
         """Fit the CTGAN Synthesizer models to the training data.
 
         Args:
             train_data (numpy.ndarray or pandas.DataFrame):
                 Training Data. It must be a 2-dimensional numpy array or a
                 pandas.DataFrame.
-            discrete_columns (list-like):
+            discrete_columns/ordinal_columns (list-like):
                 List of discrete columns to be used to generate the Conditional
                 Vector. If ``train_data`` is a Numpy array, this list should
                 contain the integer indices of the columns. Otherwise, if it is
                 a ``pandas.DataFrame``, this list should contain the column names.
-            epochs (int):
-                Number of training epochs. Defaults to 300.
-            log_frequency (boolean):
-                Whether to use log frequency of categorical levels in conditional
-                sampling. Defaults to ``True``.
         """
 
         self.transformer = DataTransformer()
-        self.transformer.fit(train_data, discrete_columns)
+        self.transformer.fit(train_data, discrete_columns, ordinal_columns)
         train_data = self.transformer.transform(train_data)
+
+        self.data_dim = self.transformer.output_dimensions
+        if self.data_dim % 2 != 0:
+            train_data = np.concatenate((train_data, np.zeros((train_data.shape[0], 1))), axis=1)
+            self.data_dim += 1
 
         data_sampler = Sampler(train_data, self.transformer.output_info)
 
-        data_dim = self.transformer.output_dimensions
-        self.cond_generator = ConditionalGenerator(
-            train_data,
-            self.transformer.output_info,
-            log_frequency
-        )
 
-        self.generator = Generator(
-            self.embedding_dim + self.cond_generator.n_opt,
-            self.gen_dim,
-            data_dim
-        ).to(self.device)
+        assert self.args.batch_size % 2 == 0
 
-        discriminator = Discriminator(
-            data_dim + self.cond_generator.n_opt,
-            self.dis_dim
-        ).to(self.device)
+        self.flow = Glow(dim=self.data_dim,
+               hidden_layers=self.args.hidden_layers,
+               num_levels=self.args.num_levels,
+               num_steps=self.args.num_steps).to(self.device)
 
-        optimizerG = optim.Adam(
-            self.generator.parameters(), lr=2e-4, betas=(0.5, 0.9),
-            weight_decay=self.l2scale
-        )
-        optimizerD = optim.Adam(discriminator.parameters(), lr=2e-4, betas=(0.5, 0.9))
+        with open(os.path.join(self.args.output_dir, 'architecture.txt'), 'w') as f:
+            f.write(self.flow.__str__())
 
-        assert self.batch_size % 2 == 0
-        mean = torch.zeros(self.batch_size, self.embedding_dim, device=self.device)
-        std = mean + 1
+        loss_fn = util.NLLLoss().to(self.device)
+        optimizer = optim.Adam(self.flow.parameters(), lr=self.args.lr, betas=(0.5, 0.9),
+            weight_decay=self.args.l2scale)
+        scheduler = MultiplicativeLR(optimizer, lr_lambda=lambda epoch: 0.95)
 
-        steps_per_epoch = max(len(train_data) // self.batch_size, 1)
-        for i in range(epochs):
+        steps_per_epoch = max(len(train_data) // self.args.batch_size, 1)
+        for i in range(self.args.epochs):
+            start = time.time()
             for id_ in range(steps_per_epoch):
-                fakez = torch.normal(mean=mean, std=std)
-
-                condvec = self.cond_generator.sample(self.batch_size)
-                if condvec is None:
-                    c1, m1, col, opt = None, None, None, None
-                    real = data_sampler.sample(self.batch_size, col, opt)
-                else:
-                    c1, m1, col, opt = condvec
-                    c1 = torch.from_numpy(c1).to(self.device)
-                    m1 = torch.from_numpy(m1).to(self.device)
-                    fakez = torch.cat([fakez, c1], dim=1)
-
-                    perm = np.arange(self.batch_size)
-                    np.random.shuffle(perm)
-                    real = data_sampler.sample(self.batch_size, col[perm], opt[perm])
-                    c2 = c1[perm]
-
-                fake = self.generator(fakez)
-                fakeact = self._apply_activate(fake)
-
+                c1, m1, col, opt = None, None, None, None
+                real = data_sampler.sample(self.args.batch_size, col, opt)
                 real = torch.from_numpy(real.astype('float32')).to(self.device)
 
-                if c1 is not None:
-                    fake_cat = torch.cat([fakeact, c1], dim=1)
-                    real_cat = torch.cat([real, c2], dim=1)
-                else:
-                    real_cat = real
-                    fake_cat = fake
-
-                y_fake = discriminator(fake_cat)
-                y_real = discriminator(real_cat)
-
-                pen = discriminator.calc_gradient_penalty(real_cat, fake_cat, self.device)
-                loss_d = -(torch.mean(y_real) - torch.mean(y_fake))
-
-                optimizerD.zero_grad()
-                pen.backward(retain_graph=True)
-                loss_d.backward()
-                optimizerD.step()
-
-                fakez = torch.normal(mean=mean, std=std)
-                condvec = self.cond_generator.sample(self.batch_size)
-
-                if condvec is None:
-                    c1, m1, col, opt = None, None, None, None
-                else:
-                    c1, m1, col, opt = condvec
-                    c1 = torch.from_numpy(c1).to(self.device)
-                    m1 = torch.from_numpy(m1).to(self.device)
-                    fakez = torch.cat([fakez, c1], dim=1)
-
-                fake = self.generator(fakez)
-                fakeact = self._apply_activate(fake)
-
-                if c1 is not None:
-                    y_fake = discriminator(torch.cat([fakeact, c1], dim=1))
-                else:
-                    y_fake = discriminator(fakeact)
-
-                if condvec is None:
-                    cross_entropy = 0
-                else:
-                    cross_entropy = self._cond_loss(fake, c1, m1)
-
-                loss_g = -torch.mean(y_fake) + cross_entropy
-
-                optimizerG.zero_grad()
-                loss_g.backward()
-                optimizerG.step()
-
-            print("Epoch %d, Loss G: %.4f, Loss D: %.4f" %
-                  (i + 1, loss_g.detach().cpu(), loss_d.detach().cpu()),
-                  flush=True)
+                optimizer.zero_grad()
+                z, sldj = self.flow(real, reverse=False)
+                loss = loss_fn(z, sldj)
+                loss.backward()
+                optimizer.step()
+            end = time.time()
+            scheduler.step()
+            print("Epoch %d, Loss: %.4f, lr: %.8f Time: %.4f" %
+                  (i + 1, loss.detach().cpu(), optimizer.param_groups[0]['lr'], end - start))
 
     def sample(self, n):
         """Sample data similar to the training data.
@@ -236,22 +146,11 @@ class CTGANSynthesizer(object):
             numpy.ndarray or pandas.DataFrame
         """
 
-        steps = n // self.batch_size + 1
+        steps = n // self.args.batch_size + 1
         data = []
         for i in range(steps):
-            mean = torch.zeros(self.batch_size, self.embedding_dim)
-            std = mean + 1
-            fakez = torch.normal(mean=mean, std=std).to(self.device)
-
-            condvec = self.cond_generator.sample_zero(self.batch_size)
-            if condvec is None:
-                pass
-            else:
-                c1 = condvec
-                c1 = torch.from_numpy(c1).to(self.device)
-                fakez = torch.cat([fakez, c1], dim=1)
-
-            fake = self.generator(fakez)
+            z = torch.randn((self.args.batch_size, self.data_dim), dtype=torch.float32, device=self.device)
+            fake, _ = self.flow(z, reverse=True)
             fakeact = self._apply_activate(fake)
             data.append(fakeact.detach().cpu().numpy())
 

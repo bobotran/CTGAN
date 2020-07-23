@@ -45,7 +45,7 @@ class DataTransformer(object):
         }
 
     def _fit_discrete(self, column, data):
-        ohe = OneHotEncoder(sparse=False)
+        ohe = OneHotEncoder(sparse=False, categories='auto')
         ohe.fit(data)
         categories = len(ohe.categories_[0])
 
@@ -56,7 +56,7 @@ class DataTransformer(object):
             'output_dimensions': categories
         }
 
-    def fit(self, data, discrete_columns=tuple()):
+    def fit(self, data, discrete_columns=tuple(), ordinal_columns=tuple()):
         self.output_info = []
         self.output_dimensions = 0
 
@@ -70,7 +70,7 @@ class DataTransformer(object):
         self.meta = []
         for column in data.columns:
             column_data = data[[column]].values
-            if column in discrete_columns:
+            if column in discrete_columns or column in ordinal_columns:
                 meta = self._fit_discrete(column, column_data)
             else:
                 meta = self._fit_continuous(column, column_data)
