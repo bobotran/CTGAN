@@ -1,6 +1,6 @@
 #!/bin/bash
 # Job name:
-#SBATCH --job-name=deeperfc
+#SBATCH --job-name=thin_fc
 #
 # Account:
 #SBATCH --account=fc_ntugame
@@ -27,9 +27,12 @@
 #SBATCH --time=72:00:00
 #
 ## Command(s) to run (example):
-EXP_NUM=deeperfc
+EXP_NUM=baseline4
 mkdir logs/${EXP_NUM}
 python -u test.py \
         --name ${EXP_NUM} \
-        --num_steps 64 \
+        --batch_size 1024 \
+        --lr 1e-4 \
+        --hidden_layers 512 \
+        --iterations 1 \
 >& logs/${EXP_NUM}/train.log

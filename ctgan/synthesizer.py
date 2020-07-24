@@ -13,6 +13,7 @@ from ctgan.glow.models import Glow
 import ctgan.glow.util as util
 import time
 from sdgym.synthesizers import BaseSynthesizer
+from imblearn.over_sampling import SMOTE
 
 import os
 import logging
@@ -51,13 +52,8 @@ class CTGlowSynthesizer(BaseSynthesizer):
         #os.makedirs(self.args.output_dir)
         with open(os.path.join(self.args.output_dir, 'train_config.json'), 'w') as f:
             json.dump(self.args.__dict__, f, indent=4)
-
-        logging.basicConfig()
-        self.logger = logging.getLogger()
-        self.logger.setLevel(logging.INFO)
-        log_fp = os.path.join(self.args.output_dir, 'train.log')
-        log_fh = logging.FileHandler(log_fp)
-        self.logger.addHandler(log_fh)
+        
+        self.label_column_idx = -1 #TODO
 
     def _apply_activate(self, data):
         data_t = []
@@ -135,6 +131,7 @@ class CTGlowSynthesizer(BaseSynthesizer):
             print("Epoch %d, Loss: %.4f, lr: %.8f Time: %.4f" %
                   (i + 1, loss.detach().cpu(), optimizer.param_groups[0]['lr'], end - start))
 
+    @torch.no_grad()
     def sample(self, n):
         """Sample data similar to the training data.
 
@@ -147,14 +144,44 @@ class CTGlowSynthesizer(BaseSynthesizer):
         """
 
         steps = n // self.args.batch_size + 1
-        data = []
-        for i in range(steps):
-            z = torch.randn((self.args.batch_size, self.data_dim), dtype=torch.float32, device=self.device)
-            fake, _ = self.flow(z, reverse=True)
-            fakeact = self._apply_activate(fake)
-            data.append(fakeact.detach().cpu().numpy())
 
-        data = np.concatenate(data, axis=0)
-        data = data[:n]
+        if self.args.smote:
+            latent, labels = [], []
+            for i in range(steps):
+                z = torch.randn((self.args.batch_size, self.data_dim), dtype=torch.float32, device=self.device)
+                latent.append(z.detach().cpu().numpy())
+    
+                fake, _ = self.flow(z, reverse=True)
+                fakeact = self._apply_activate(fake)
+                y = self.transformer.inverse_transform(fakeact.detach().cpu().numpy(), None)[:,self.label_column_idx]
+                labels.append(y)
+    
+            latent = np.concatenate(latent, axis=0)
+            labels = np.concatenate(labels, axis=0)
+            sm = SMOTE(random_state=self.args.seed)
+            latent_new, _ = sm.fit_resample(latent, labels)
+    
+            np.random.shuffle(latent_new)
+            latent_new = torch.tensor(latent_new, device=self.device)
+    
+            data = [] 
+            for i in range(steps):
+                fake, _ = self.flow(latent_new[i*self.args.batch_size:(i+1)*self.args.batch_size], reverse=True)
+                fakeact = self._apply_activate(fake)
+                data.append(fakeact.detach().cpu().numpy())
+         
+            data = np.concatenate(data, axis=0)
+            data = data[:n]
 
+        else:
+            data = []
+            for i in range(steps):
+                z = torch.randn((self.args.batch_size, self.data_dim), dtype=torch.float32, device=self.device)
+                fake, _ = self.flow(z, reverse=True)
+                fakeact = self._apply_activate(fake)
+                data.append(fakeact.detach().cpu().numpy())
+    
+            data = np.concatenate(data, axis=0)
+            data = data[:n] 
+ 
         return self.transformer.inverse_transform(data, None)

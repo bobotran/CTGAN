@@ -3,7 +3,7 @@ import numpy as np
 
 class Sampler(object):
     """
-    self.model stores dataset indexed by column and (discrete) value
+    self.model stores dataset indices by column and (discrete) value
     """
 
     def __init__(self, data, output_info):

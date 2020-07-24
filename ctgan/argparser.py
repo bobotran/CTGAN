@@ -23,6 +23,10 @@ def parse_args():
 
     parser.add_argument('--log_dir', type=str, default='logs', help='Logs directory name')
 
+    parser.add_argument('--iterations', type=int, default=1, help='Number of evaluation runs over which results are averaged')
+
+    parser.add_argument('--smote', type=str2bool, default=False, help='Use SMOTE on latent space to augment synthetic dataset')
+
     args = parser.parse_args()
 
     args.output_dir = os.path.join(args.log_dir, args.name)

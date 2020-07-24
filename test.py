@@ -7,5 +7,5 @@ import os
 args = argparser.parse_args()
 ctgan = CTGlowSynthesizer(args)
 
-scores = benchmark(synthesizers={args.name: ctgan.fit_sample}, datasets=args.datasets, iterations=1)
+scores = benchmark(synthesizers={args.name: ctgan.fit_sample}, datasets=args.datasets, iterations=args.iterations)
 print(scores)
