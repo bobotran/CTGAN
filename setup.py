@@ -14,9 +14,10 @@ with open('HISTORY.md') as history_file:
 install_requires = [
     'torch<2,>=1.0',
     'torchvision<1,>=0.4.2',
-    'scikit-learn<0.23,>=0.21',
+    'scikit-learn<0.24,>=0.21',
     'numpy<2,>=1.17.4',
     'pandas<0.26,>=0.24',
+    'imbalanced-learn'
 ]
 
 setup_requires = [

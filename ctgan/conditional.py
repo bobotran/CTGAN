@@ -30,8 +30,7 @@ class ConditionalGenerator(object):
 
             else:
                 assert 0
-
-        assert start == data.shape[1]
+        assert start == data.shape[1] or start == data.shape[1] - 1
 
         self.interval = []
         self.n_col = 0
@@ -86,6 +85,9 @@ class ConditionalGenerator(object):
         return vec1, mask1, idx, opt1prime
 
     def sample_zero(self, batch):
+        '''
+        Return random conditions
+        '''
         if self.n_col == 0:
             return None
 

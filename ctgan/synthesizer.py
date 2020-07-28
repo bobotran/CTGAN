@@ -54,6 +54,10 @@ class CTGlowSynthesizer(BaseSynthesizer):
             json.dump(self.args.__dict__, f, indent=4)
         
         self.label_column_idx = -1 #TODO
+        self.transformed_data = None
+        self.labels = None
+
+        self.output_latent = True
 
     def _apply_activate(self, data):
         data_t = []
@@ -85,7 +89,9 @@ class CTGlowSynthesizer(BaseSynthesizer):
                 contain the integer indices of the columns. Otherwise, if it is
                 a ``pandas.DataFrame``, this list should contain the column names.
         """
-
+        if self.output_latent:
+            np.save('ctglow_data.npy', train_data)
+        self.labels = train_data[:,self.label_column_idx]
         self.transformer = DataTransformer()
         self.transformer.fit(train_data, discrete_columns, ordinal_columns)
         train_data = self.transformer.transform(train_data)
@@ -95,8 +101,9 @@ class CTGlowSynthesizer(BaseSynthesizer):
             train_data = np.concatenate((train_data, np.zeros((train_data.shape[0], 1))), axis=1)
             self.data_dim += 1
 
+        self.transformed_data = train_data
         data_sampler = Sampler(train_data, self.transformer.output_info)
-
+        self.cond_generator = ConditionalGenerator(train_data, self.transformer.output_info, True)
 
         assert self.args.batch_size % 2 == 0
 
@@ -117,7 +124,8 @@ class CTGlowSynthesizer(BaseSynthesizer):
         for i in range(self.args.epochs):
             start = time.time()
             for id_ in range(steps_per_epoch):
-                c1, m1, col, opt = None, None, None, None
+                condvec = self.cond_generator.sample(self.args.batch_size)
+                c1, m1, col, opt = condvec
                 real = data_sampler.sample(self.args.batch_size, col, opt)
                 real = torch.from_numpy(real.astype('float32')).to(self.device)
 
@@ -143,37 +151,42 @@ class CTGlowSynthesizer(BaseSynthesizer):
             numpy.ndarray or pandas.DataFrame
         """
 
-        steps = n // self.args.batch_size + 1
-
         if self.args.smote:
-            latent, labels = [], []
+            steps = len(self.transformed_data) // self.args.batch_size + 1
+            latent = []
             for i in range(steps):
-                z = torch.randn((self.args.batch_size, self.data_dim), dtype=torch.float32, device=self.device)
+                start_idx = i * self.args.batch_size
+                end_idx = min((i+1) * self.args.batch_size, len(self.transformed_data))
+
+                batch = self.transformed_data[start_idx:end_idx]
+                batch = torch.from_numpy(batch.astype('float32')).to(self.device)
+                z, _ = self.flow(batch, reverse=False)
                 latent.append(z.detach().cpu().numpy())
     
-                fake, _ = self.flow(z, reverse=True)
-                fakeact = self._apply_activate(fake)
-                y = self.transformer.inverse_transform(fakeact.detach().cpu().numpy(), None)[:,self.label_column_idx]
-                labels.append(y)
-    
             latent = np.concatenate(latent, axis=0)
-            labels = np.concatenate(labels, axis=0)
+            if self.output_latent:
+                np.save('ctglow_latent.npy', latent)
             sm = SMOTE(random_state=self.args.seed)
-            latent_new, _ = sm.fit_resample(latent, labels)
-    
-            np.random.shuffle(latent_new)
-            latent_new = torch.tensor(latent_new, device=self.device)
-    
+            latent_new, _ = sm.fit_resample(latent, self.labels)
+   
+            steps = len(latent_new) // self.args.batch_size + 1
             data = [] 
             for i in range(steps):
-                fake, _ = self.flow(latent_new[i*self.args.batch_size:(i+1)*self.args.batch_size], reverse=True)
-                fakeact = self._apply_activate(fake)
-                data.append(fakeact.detach().cpu().numpy())
-         
+                start_idx = i * self.args.batch_size
+                end_idx = min((i+1) * self.args.batch_size, len(latent_new))
+
+                batch = latent_new[start_idx:end_idx]
+                batch = torch.from_numpy(batch.astype('float32')).to(self.device)
+                smoted, _ = self.flow(batch, reverse=True)
+                smotedact = self._apply_activate(smoted)
+                data.append(smotedact.detach().cpu().numpy())
+
             data = np.concatenate(data, axis=0)
+            np.random.shuffle(data)
             data = data[:n]
 
         else:
+            steps = n // self.args.batch_size + 1
             data = []
             for i in range(steps):
                 z = torch.randn((self.args.batch_size, self.data_dim), dtype=torch.float32, device=self.device)

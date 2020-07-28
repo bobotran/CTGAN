@@ -1,6 +1,6 @@
 #!/bin/bash
 # Job name:
-#SBATCH --job-name=thin_fc
+#SBATCH --job-name=smote2
 #
 # Account:
 #SBATCH --account=fc_ntugame
@@ -27,12 +27,14 @@
 #SBATCH --time=72:00:00
 #
 ## Command(s) to run (example):
-EXP_NUM=baseline4
+for TRIAL in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29
+do
+EXP_NUM=new_smote${TRIAL}
 mkdir logs/${EXP_NUM}
 python -u test.py \
         --name ${EXP_NUM} \
         --batch_size 1024 \
-        --lr 1e-4 \
-        --hidden_layers 512 \
-        --iterations 1 \
+        --epochs 100 \
+        --smote True \
 >& logs/${EXP_NUM}/train.log
+done
