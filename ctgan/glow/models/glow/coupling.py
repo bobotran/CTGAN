@@ -50,7 +50,7 @@ class NN(nn.Module):
         modules.append(norm_fn(in_channels))
 
         linear_layer = nn.Linear(in_channels, hidden_layers[0])
-        nn.init.normal_(linear_layer.weight, 0., 0.05)
+        #nn.init.normal_(linear_layer.weight, 0., 0.05)
         modules.append(linear_layer)
         modules.append(norm_fn(hidden_layers[0]))
         modules.append(nn.ReLU())
@@ -58,7 +58,7 @@ class NN(nn.Module):
         layers_to_add = hidden_layers
         while len(layers_to_add) >= 2:
             linear_layer = nn.Linear(layers_to_add[0], layers_to_add[1])
-            nn.init.normal_(linear_layer.weight, 0., 0.05)
+            #nn.init.normal_(linear_layer.weight, 0., 0.05)
             modules.append(linear_layer)
             modules.append(norm_fn(layers_to_add[1]))
             modules.append(nn.ReLU())

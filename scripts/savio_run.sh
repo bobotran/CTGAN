@@ -1,6 +1,6 @@
 #!/bin/bash
 # Job name:
-#SBATCH --job-name=smote2
+#SBATCH --job-name=slow_decay_likelihood
 #
 # Account:
 #SBATCH --account=fc_ntugame
@@ -27,14 +27,11 @@
 #SBATCH --time=72:00:00
 #
 ## Command(s) to run (example):
-for TRIAL in 0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29
-do
-EXP_NUM=new_smote${TRIAL}
+EXP_NUM=$1
 mkdir logs/${EXP_NUM}
-python -u test.py \
+python -u scripts/test.py \
         --name ${EXP_NUM} \
-        --batch_size 1024 \
-        --epochs 100 \
-        --smote True \
+        --datasets asia \
+        --iterations 2 \
+        --config_path logs/slow_decay/slow_decay1/train_config.json \
 >& logs/${EXP_NUM}/train.log
-done

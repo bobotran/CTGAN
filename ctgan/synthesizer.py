@@ -53,11 +53,9 @@ class CTGlowSynthesizer(BaseSynthesizer):
         with open(os.path.join(self.args.output_dir, 'train_config.json'), 'w') as f:
             json.dump(self.args.__dict__, f, indent=4)
         
-        self.label_column_idx = -1 #TODO
+        self.label_column_idx = None
         self.transformed_data = None
         self.labels = None
-
-        self.output_latent = True
 
     def _apply_activate(self, data):
         data_t = []
@@ -76,7 +74,7 @@ class CTGlowSynthesizer(BaseSynthesizer):
 
         return torch.cat(data_t, dim=1)
 
-    def fit(self, train_data, discrete_columns=tuple(), ordinal_columns=tuple()):
+    def fit(self, train_data, meta=None, discrete_columns=tuple(), ordinal_columns=tuple()):
         """Fit the CTGAN Synthesizer models to the training data.
 
         Args:
@@ -89,8 +87,10 @@ class CTGlowSynthesizer(BaseSynthesizer):
                 contain the integer indices of the columns. Otherwise, if it is
                 a ``pandas.DataFrame``, this list should contain the column names.
         """
-        if self.output_latent:
-            np.save('ctglow_data.npy', train_data)
+        label_column_idx = [i for i, col in enumerate(meta['columns']) if col['name']=='label']
+        self.label_column_idx = label_column_idx[0] if len(label_column_idx) > 0 else None
+        if self.args.output_latent:
+            np.save(os.path.join(self.args.output_dir, 'ctglow_data.npy'), train_data)
         self.labels = train_data[:,self.label_column_idx]
         self.transformer = DataTransformer()
         self.transformer.fit(train_data, discrete_columns, ordinal_columns)
@@ -102,6 +102,9 @@ class CTGlowSynthesizer(BaseSynthesizer):
             self.data_dim += 1
 
         self.transformed_data = train_data
+        if self.args.output_latent:
+            np.save(os.path.join(self.args.output_dir, 'alpha_beta_data.npy'), self.transformed_data)
+
         data_sampler = Sampler(train_data, self.transformer.output_info)
         self.cond_generator = ConditionalGenerator(train_data, self.transformer.output_info, True)
 
@@ -118,22 +121,29 @@ class CTGlowSynthesizer(BaseSynthesizer):
         loss_fn = util.NLLLoss().to(self.device)
         optimizer = optim.Adam(self.flow.parameters(), lr=self.args.lr, betas=(0.5, 0.9),
             weight_decay=self.args.l2scale)
-        scheduler = MultiplicativeLR(optimizer, lr_lambda=lambda epoch: 0.95)
+        scheduler = MultiplicativeLR(optimizer, lr_lambda=lambda epoch: self.args.lr_decay)
 
         steps_per_epoch = max(len(train_data) // self.args.batch_size, 1)
         for i in range(self.args.epochs):
             start = time.time()
             for id_ in range(steps_per_epoch):
                 condvec = self.cond_generator.sample(self.args.batch_size)
-                c1, m1, col, opt = condvec
+
+                if condvec is None:
+                    c1, m1, col, opt = None, None, None, None
+                else:
+                    c1, m1, col, opt = condvec
+
                 real = data_sampler.sample(self.args.batch_size, col, opt)
                 real = torch.from_numpy(real.astype('float32')).to(self.device)
 
-                optimizer.zero_grad()
                 z, sldj = self.flow(real, reverse=False)
                 loss = loss_fn(z, sldj)
+
+                optimizer.zero_grad()
                 loss.backward()
                 optimizer.step()
+
             end = time.time()
             scheduler.step()
             print("Epoch %d, Loss: %.4f, lr: %.8f Time: %.4f" %
@@ -151,7 +161,7 @@ class CTGlowSynthesizer(BaseSynthesizer):
             numpy.ndarray or pandas.DataFrame
         """
 
-        if self.args.smote:
+        if self.args.smote == 'augment':
             steps = len(self.transformed_data) // self.args.batch_size + 1
             latent = []
             for i in range(steps):
@@ -164,8 +174,8 @@ class CTGlowSynthesizer(BaseSynthesizer):
                 latent.append(z.detach().cpu().numpy())
     
             latent = np.concatenate(latent, axis=0)
-            if self.output_latent:
-                np.save('ctglow_latent.npy', latent)
+            if self.args.output_latent:
+                np.save(os.path.join(self.args.output_dir, 'ctglow_latent.npy'), latent)
             sm = SMOTE(random_state=self.args.seed)
             latent_new, _ = sm.fit_resample(latent, self.labels)
    
@@ -183,6 +193,64 @@ class CTGlowSynthesizer(BaseSynthesizer):
 
             data = np.concatenate(data, axis=0)
             np.random.shuffle(data)
+            data = data[:n]
+
+        elif self.args.smote == 'latent':
+            steps = n // self.args.batch_size + 1
+            latent, labels = [], []
+            for i in range(steps):
+                z = torch.randn((self.args.batch_size, self.data_dim), dtype=torch.float32, device=self.device)
+                latent.append(z.detach().cpu().numpy())
+
+                fake, _ = self.flow(z, reverse=True)
+                fakeact = self._apply_activate(fake)
+                y = self.transformer.inverse_transform(fakeact.detach().cpu().numpy(), None)[:,self.label_column_idx]
+                labels.append(y)
+
+            latent = np.concatenate(latent, axis=0)
+            labels = np.concatenate(labels, axis=0)
+            sm = SMOTE(random_state=self.args.seed)
+            latent_new, _ = sm.fit_resample(latent, labels)
+
+            np.random.shuffle(latent_new)
+            latent_new = torch.tensor(latent_new, device=self.device)
+
+            data = [] 
+            for i in range(steps):
+                fake, _ = self.flow(latent_new[i*self.args.batch_size:(i+1)*self.args.batch_size], reverse=True)
+                fakeact = self._apply_activate(fake)
+                data.append(fakeact.detach().cpu().numpy())
+
+            data = np.concatenate(data, axis=0)
+            data = data[:n]
+
+        elif self.args.smote == 'alpha_beta':
+            steps = n // self.args.batch_size + 1
+            data, labels = [], []
+            for i in range(steps):
+                z = torch.randn((self.args.batch_size, self.data_dim), dtype=torch.float32, device=self.device)
+
+                fake, _ = self.flow(z, reverse=True)
+                data.append(fake.detach().cpu().numpy())
+                fakeact = self._apply_activate(fake)
+                y = self.transformer.inverse_transform(fakeact.detach().cpu().numpy(), None)[:,self.label_column_idx]
+                labels.append(y)
+
+            data = np.concatenate(data, axis=0)
+            labels = np.concatenate(labels, axis=0)
+            sm = SMOTE(random_state=self.args.seed)
+            data_new, _ = sm.fit_resample(data, labels)
+
+            np.random.shuffle(data_new)
+            data_new = torch.tensor(data_new, device=self.device)
+
+            data = [] 
+            for i in range(steps):
+                fake, _ = self.flow(data_new[i*self.args.batch_size:(i+1)*self.args.batch_size], reverse=True)
+                fakeact = self._apply_activate(fake)
+                data.append(fakeact.detach().cpu().numpy())
+
+            data = np.concatenate(data, axis=0)
             data = data[:n]
 
         else:
